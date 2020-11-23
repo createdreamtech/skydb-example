@@ -1,40 +1,93 @@
-import React, { useState } from "react";
-import { SkynetClient, genKeyPairFromSeed } from "skynet-js";
+import React, { useState, useEffect } from "react";
+import { genKeyPairFromSeed } from "skynet-js";
 import SkynetSVG from "./assets/skynet.svg";
-
-const skynetClient = new SkynetClient(process.env.REACT_APP_PORTAL_URL);
-const filename = "data.json";
+import { Cirrus, SkyDBStorage } from "@createdreamtech/cirrus";
+import { getAllNotes } from "./queries";
+import { SkyNote, SkyNoteTableName } from "./schema";
 
 function App() {
   const [secret, setSecret] = useState("");
   const [note, setNote] = useState("");
+  const [notes, setNotes] = useState<
+    { id: number; note: string; __origin: string }[]
+  >([]);
+  const [db, setDB] = useState<Cirrus>();
+  const [initializedDB, setInitializedDB] = useState(false);
   const [revision, setRevision] = useState(0);
   const [authenticated, setAuthenticated] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [displaySuccess, setDisplaySuccess] = useState(false);
+
+  function allNotes() {
+    if (!notes) return;
+    return notes.map((n) => {
+      return (
+        <div>
+          <div className="mt-8">
+            <h4 className="text-gray-300">A note from: {n.__origin}</h4>
+            <textarea
+              rows={3}
+              className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:shadow-outline-blue focus:border-blue-300 focus:z-10 sm:text-sm sm:leading-5"
+              value={n.note}
+              autoFocus={true}
+              placeholder="You did not set a note yet"
+            />
+          </div>
+        </div>
+      );
+    });
+  }
+  // Generate Application Key , this is normally static we only need
+  // the public key so it should be generated randomly
+  useEffect(() => {
+    async function initializeDatabase() {
+      const appKeyPair = genKeyPairFromSeed("exampleAppKeySeed");
+      const storage = new SkyDBStorage(secret, appKeyPair.publicKey);
+      const cirrusDB = new Cirrus(storage, storage.pubKey);
+      await cirrusDB.init();
+      const actions = await cirrusDB.storage.get();
+      console.log(actions);
+      setDB(cirrusDB);
+      setInitializedDB(true);
+    }
+    if (secret !== "" && !initializedDB) {
+      initializeDatabase();
+    }
+  }, [secret, initializedDB]);
+  // const appKeyPair = genKeyPairFromSeed("exampleAppKeySeed");
+  // const storage = new SkyDBStorage(secret, appKeyPair.publicKey)
+  //  const db = new Cirrus(storage, storage.pubKey)
   const handleReset = () => {
     setSecret("");
     setNote("");
+    setNotes([]);
     setRevision(0);
     setErrorMessage("");
     setLoading(false);
     setDisplaySuccess(false);
     setAuthenticated(false);
+    setInitializedDB(false);
   };
   const loadNote = async () => {
-    try {
-      const { publicKey } = genKeyPairFromSeed(secret);
-      const entry = await skynetClient.db.getJSON(publicKey, filename);
+    if (initializedDB && db)
+      try {
+        const entries = await getAllNotes(db);
+        setNotes(entries);
+        // a little tricky state here update list of all the notes
+        // to date
+        const localEntries = entries.filter(
+          (e) => e.__origin === db.defaultOrigin
+        );
 
-      if (entry) {
-        setNote(entry.data?.note ?? "");
-        setRevision(entry.revision);
+        if (localEntries.length > 0) {
+          setNote(entries[localEntries.length - 1].note ?? "");
+          setRevision(entries[localEntries.length - 1].id);
+        }
+      } catch (error) {
+        setErrorMessage(error.message);
+        setNote("");
       }
-    } catch (error) {
-      setErrorMessage(error.message);
-      setNote("");
-    }
   };
   const handleLogin = async (event) => {
     event.preventDefault();
@@ -48,21 +101,20 @@ function App() {
   const handleSetNote = async () => {
     setLoading(true);
 
-    const { privateKey } = genKeyPairFromSeed(secret);
-    try {
-      await skynetClient.db.setJSON(
-        privateKey,
-        filename,
-        { note },
-        revision + 1
-      );
-
-      setRevision(revision + 1);
-      setDisplaySuccess(true);
-      setTimeout(() => setDisplaySuccess(false), 5000);
-    } catch (error) {
-      setErrorMessage(error.message);
-    }
+    //    const { privateKey } = genKeyPairFromSeed(secret);
+    if (db)
+      try {
+        const skyNoteTable = await db.getTable(SkyNoteTableName, SkyNote);
+        await skyNoteTable.asserts({ id: revision + 1, note });
+        // for the sake of example every not is saved every time
+        // this can instead be done on a cadence
+        await db.save();
+        setRevision(revision + 1);
+        setDisplaySuccess(true);
+        setTimeout(() => setDisplaySuccess(false), 5000);
+      } catch (error) {
+        setErrorMessage(error.message);
+      }
 
     setLoading(false);
   };
@@ -82,51 +134,61 @@ function App() {
         </div>
 
         {authenticated ? (
-          <form className="mt-8" onSubmit={handleLogin}>
-            <div className="rounded-md shadow-sm">
-              <div>
-                <textarea
-                  rows={3}
-                  className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:shadow-outline-blue focus:border-blue-300 focus:z-10 sm:text-sm sm:leading-5"
-                  value={note}
-                  autoFocus={true}
-                  onChange={(event) => setNote(event.target.value)}
-                  placeholder="You did not set a note yet"
-                />
+          <div>
+            <form className="mt-8" onSubmit={handleLogin}>
+              <div className="rounded-md shadow-sm">
+                <div>
+                  <textarea
+                    rows={3}
+                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:shadow-outline-blue focus:border-blue-300 focus:z-10 sm:text-sm sm:leading-5"
+                    value={note}
+                    autoFocus={true}
+                    onChange={(event) => setNote(event.target.value)}
+                    placeholder="You did not set a note yet"
+                  />
+                </div>
               </div>
-            </div>
 
-            <div className="mt-6">
-              <button
-                type="submit"
-                className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm leading-5 font-medium rounded-md text-white bg-green-600 hover:bg-green-500 focus:outline-none focus:border-green-700 focus:shadow-outline-green active:bg-green-700 transition duration-150 ease-in-out"
-                onClick={handleSetNote}
-                disabled={loading}
-              >
-                {loading ? "Sending..." : "Save this note"}
-              </button>
-            </div>
+              <div className="mt-6">
+                <button
+                  type="submit"
+                  className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm leading-5 font-medium rounded-md text-white bg-green-600 hover:bg-green-500 focus:outline-none focus:border-green-700 focus:shadow-outline-green active:bg-green-700 transition duration-150 ease-in-out"
+                  onClick={handleSetNote}
+                  disabled={loading}
+                >
+                  {loading ? "Sending..." : "Save this note"}
+                </button>
+              </div>
 
-            <div className="mt-2 flex justify-between">
-              <button
-                onClick={handleReset}
-                className="background-transparent text-sm text-green-500 hover:underline outline-none focus:outline-none mr-1 mb-1"
-                type="button"
-              >
-                &larr; go back
-              </button>
+              <div className="mt-2 flex justify-between">
+                <button
+                  onClick={handleReset}
+                  className="background-transparent text-sm text-green-500 hover:underline outline-none focus:outline-none mr-1 mb-1"
+                  type="button"
+                >
+                  &larr; go back
+                </button>
 
-              {displaySuccess && (
-                <span className="text-sm text-green-500 font-bold">
-                  Your note has been saved!
-                </span>
+                {displaySuccess && (
+                  <span className="text-sm text-green-500 font-bold">
+                    Your note has been saved!
+                  </span>
+                )}
+              </div>
+
+              {errorMessage && (
+                <p className="mt-2 text-sm text-red-500">{errorMessage}</p>
               )}
+            </form>
+            <div>
+              <h3 className="text-gray-300">
+                {" "}
+                All notes with originating public keys:
+              </h3>
             </div>
-
-            {errorMessage && (
-              <p className="mt-2 text-sm text-red-500">{errorMessage}</p>
-            )}
-          </form>
+            <hr></hr>
+            <div>{allNotes()}</div>
+          </div>
         ) : (
           <form className="mt-8" onSubmit={handleLogin}>
             <input type="hidden" name="remember" value="true" />
