@@ -4,7 +4,6 @@ import "fontsource-metropolis/all.css";
 import "./assets/main.css";
 import App from "./App";
 import reportWebVitals from "./reportWebVitals";
-import { Cirrus, MemoryStorage, SkyDBStorage } from "@createdreamtech/cirrus";
 
 ReactDOM.render(
   <React.StrictMode>
