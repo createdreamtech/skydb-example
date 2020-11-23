@@ -8,9 +8,11 @@ import { SkyNote, SkyNoteTableName } from "./schema";
 function App() {
   const [secret, setSecret] = useState("");
   const [note, setNote] = useState("");
+  const [submitted, setSubmitted] = useState(false);
   const [notes, setNotes] = useState<
     { id: number; note: string; __origin: string }[]
   >([]);
+  const [foreignPubKey, setForeignPubKey] = useState("");
   const [db, setDB] = useState<Cirrus>();
   const [initializedDB, setInitializedDB] = useState(false);
   const [revision, setRevision] = useState(0);
@@ -21,15 +23,16 @@ function App() {
 
   function allNotes() {
     if (!notes) return;
-    return notes.map((n) => {
+    return notes.map((n, i) => {
       return (
-        <div>
+        <div key={`${i}-note`}>
           <div className="mt-8">
             <h4 className="text-gray-300">A note from: {n.__origin}</h4>
             <textarea
               rows={3}
               className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:shadow-outline-blue focus:border-blue-300 focus:z-10 sm:text-sm sm:leading-5"
               value={n.note}
+              readOnly
               autoFocus={true}
               placeholder="You did not set a note yet"
             />
@@ -41,25 +44,70 @@ function App() {
   // Generate Application Key , this is normally static we only need
   // the public key so it should be generated randomly
   useEffect(() => {
+    const loadNote = async () => {
+      if (initializedDB && db)
+        try {
+          const entries = await getAllNotes(db);
+          setNotes(entries);
+          // a little tricky state here update list of all the notes
+          // to date
+          const localEntries = entries.filter(
+            (e) => e.__origin === db.defaultOrigin
+          );
+
+          if (localEntries.length > 0) {
+            setNote(entries[localEntries.length - 1].note ?? "");
+            setRevision(entries[localEntries.length - 1].id);
+          }
+        } catch (error) {
+          setErrorMessage(error.message);
+          setNote("");
+        }
+    };
     async function initializeDatabase() {
-      const appKeyPair = genKeyPairFromSeed("exampleAppKeySeed");
-      const storage = new SkyDBStorage(secret, appKeyPair.publicKey);
-      const cirrusDB = new Cirrus(storage, storage.pubKey);
-      await cirrusDB.init();
-      const actions = await cirrusDB.storage.get();
-      console.log(actions);
-      setDB(cirrusDB);
-      setInitializedDB(true);
+      if (secret !== "" && !initializedDB && submitted) {
+        const appKeyPair = genKeyPairFromSeed("exampleAppKeySeed");
+        const storage = new SkyDBStorage(secret, appKeyPair.publicKey);
+        const cirrusDB = new Cirrus(storage, storage.pubKey);
+        await cirrusDB.init();
+        const actions = await cirrusDB.storage.get();
+        console.log(actions);
+        console.log(foreignPubKey);
+        if (foreignPubKey !== "")
+          try {
+            // Here we just simply add the foreign key to the set of places we look for data
+            // and we integrate the actions
+            console.log("_------------");
+            await cirrusDB.add(appKeyPair.publicKey, foreignPubKey);
+            const actions = await cirrusDB.storage.get();
+            console.log(actions);
+          } catch (e) {
+            console.log(e);
+          }
+        setDB(cirrusDB);
+        setInitializedDB(true);
+      }
+      if (secret && initializedDB && submitted && loading) {
+        await loadNote();
+        setAuthenticated(true);
+        setLoading(false);
+      }
     }
-    if (secret !== "" && !initializedDB) {
-      initializeDatabase();
-    }
-  }, [secret, initializedDB]);
-  // const appKeyPair = genKeyPairFromSeed("exampleAppKeySeed");
-  // const storage = new SkyDBStorage(secret, appKeyPair.publicKey)
-  //  const db = new Cirrus(storage, storage.pubKey)
+    initializeDatabase();
+  }, [
+    secret,
+    initializedDB,
+    db,
+    foreignPubKey,
+    submitted,
+    loading,
+    authenticated,
+  ]);
+
   const handleReset = () => {
     setSecret("");
+    setForeignPubKey("");
+    setSubmitted(false);
     setNote("");
     setNotes([]);
     setRevision(0);
@@ -69,35 +117,13 @@ function App() {
     setAuthenticated(false);
     setInitializedDB(false);
   };
-  const loadNote = async () => {
-    if (initializedDB && db)
-      try {
-        const entries = await getAllNotes(db);
-        setNotes(entries);
-        // a little tricky state here update list of all the notes
-        // to date
-        const localEntries = entries.filter(
-          (e) => e.__origin === db.defaultOrigin
-        );
 
-        if (localEntries.length > 0) {
-          setNote(entries[localEntries.length - 1].note ?? "");
-          setRevision(entries[localEntries.length - 1].id);
-        }
-      } catch (error) {
-        setErrorMessage(error.message);
-        setNote("");
-      }
-  };
-  const handleLogin = async (event) => {
+  const handleSubmitted = async (event) => {
     event.preventDefault();
+    setSubmitted(true);
     setLoading(true);
-
-    await loadNote();
-
-    setAuthenticated(true);
-    setLoading(false);
   };
+
   const handleSetNote = async () => {
     setLoading(true);
 
@@ -135,7 +161,7 @@ function App() {
 
         {authenticated ? (
           <div>
-            <form className="mt-8" onSubmit={handleLogin}>
+            <form className="mt-8" onSubmit={handleSubmitted}>
               <div className="rounded-md shadow-sm">
                 <div>
                   <textarea
@@ -190,7 +216,7 @@ function App() {
             <div>{allNotes()}</div>
           </div>
         ) : (
-          <form className="mt-8" onSubmit={handleLogin}>
+          <form className="mt-8" onSubmit={handleSubmitted}>
             <input type="hidden" name="remember" value="true" />
             <div className="rounded-md shadow-sm">
               <div>
@@ -202,6 +228,16 @@ function App() {
                   placeholder="Your very secret passphrase"
                   value={secret}
                   onChange={(event) => setSecret(event.target.value)}
+                />
+              </div>
+              <div className="mt-8">
+                <input
+                  aria-label="Pubkey"
+                  name="otherPubKey"
+                  className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:shadow-outline-blue focus:border-blue-300 focus:z-10 sm:text-sm sm:leading-5"
+                  placeholder="(Optional) another application public key"
+                  value={foreignPubKey}
+                  onChange={(event) => setForeignPubKey(event.target.value)}
                 />
               </div>
             </div>
