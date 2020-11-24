@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { genKeyPairFromSeed } from "skynet-js";
 import SkynetSVG from "./assets/skynet.svg";
-import { Cirrus, SkyDBStorage } from "@createdreamtech/cirrus";
+import { Cirrus, SkyDBStorage, Actions } from "@createdreamtech/cirrus";
 import { getAllNotes } from "./queries";
 import { SkyNote, SkyNoteTableName } from "./schema";
 
@@ -41,9 +41,9 @@ function App() {
       );
     });
   }
-  // Generate Application Key , this is normally static we only need
-  // the public key so it should be generated randomly
+
   useEffect(() => {
+    // helper function to load a Note
     const loadNote = async () => {
       if (initializedDB && db)
         try {
@@ -64,20 +64,18 @@ function App() {
           setNote("");
         }
     };
+    // helper function to initializeDatabase State
     async function initializeDatabase() {
       if (secret !== "" && !initializedDB && submitted) {
         const appKeyPair = genKeyPairFromSeed("exampleAppKeySeed");
         const storage = new SkyDBStorage(secret, appKeyPair.publicKey);
         const cirrusDB = new Cirrus(storage, storage.pubKey);
         await cirrusDB.init();
-        const actions = await cirrusDB.storage.get();
-        console.log(actions);
-        console.log(foreignPubKey);
+        // Here we check to see if a user has specified a friend's DB
         if (foreignPubKey !== "")
           try {
             // Here we just simply add the foreign key to the set of places we look for data
             // and we integrate the actions
-            console.log("_------------");
             await cirrusDB.add(appKeyPair.publicKey, foreignPubKey);
             const actions = await cirrusDB.storage.get();
             console.log(actions);
@@ -127,14 +125,18 @@ function App() {
   const handleSetNote = async () => {
     setLoading(true);
 
-    //    const { privateKey } = genKeyPairFromSeed(secret);
     if (db)
       try {
         const skyNoteTable = await db.getTable(SkyNoteTableName, SkyNote);
         await skyNoteTable.asserts({ id: revision + 1, note });
         // for the sake of example every not is saved every time
         // this can instead be done on a cadence
-        await db.save();
+        // additionally you can specify a filter to restrict only saving actions from your own origin
+        // or actions that meet any kind of metric you'd like
+        await db.saveOnly((action: Actions): boolean => {
+          return action.__origin === db.defaultOrigin;
+        });
+
         setRevision(revision + 1);
         setDisplaySuccess(true);
         setTimeout(() => setDisplaySuccess(false), 5000);
@@ -151,11 +153,11 @@ function App() {
         <div>
           <img className="mx-auto h-24 w-auto" src={SkynetSVG} alt="Skynet" />
           <h2 className="mt-6 text-center text-4xl sm:text-5xl font-extrabold text-gray-300">
-            Note To Self
+            Notes To Self and Notes From Others
           </h2>
           <p className="mt-2 text-center text-sm leading-5 text-gray-300">
-            Use SkyDB to write yourself a note and securely save it to a
-            decentralized network
+            Use SkyDB to write yourself notes and read notes from a friend Enter
+            the public key of the the friends notes and retrieve them.
           </p>
         </div>
 
